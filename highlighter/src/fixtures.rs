@@ -193,7 +193,7 @@ pub fn highlighter_fixture(
         Bound::Unbounded => src.len_bytes(),
     };
     let ident = " ".repeat(comment_prefix.width());
-    let mut highlighter = Highlighter::new(syntax, src, &loader, start as u32..);
+    let mut highlighter = Highlighter::new(syntax, src, &loader, start as u32.., ());
     let mut pos = highlighter.next_event_offset();
     let mut highlight_stack = Vec::new();
     let mut line_idx = src.byte_to_line(pos as usize);

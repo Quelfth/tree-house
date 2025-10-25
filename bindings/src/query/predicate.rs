@@ -242,6 +242,7 @@ impl Query {
     }
 }
 
+#[derive(Debug)]
 pub enum PredicateArg {
     Capture(Capture),
     String(QueryStr),

@@ -14,6 +14,7 @@ use crate::{Injection, Language, Layer, Syntax};
 use arc_swap::ArcSwap;
 use hashbrown::{HashMap, HashSet};
 use ropey::RopeSlice;
+use tree_sitter::query::PredicateArg;
 use tree_sitter::{
     query::{self, InvalidPredicateError, Query, UserPredicate},
     Capture, Grammar,
@@ -31,6 +32,8 @@ pub struct HighlightQuery {
     /// Patterns that do not match when the node is a local.
     non_local_patterns: HashSet<Pattern>,
     local_reference_capture: Option<Capture>,
+
+    special_patterns: HashMap<Pattern, Vec<(String, Vec<PredicateArg>)>>,
 }
 
 impl HighlightQuery {
@@ -46,6 +49,8 @@ impl HighlightQuery {
         query_source.push_str(local_query_text);
 
         let mut non_local_patterns = HashSet::new();
+        let mut special_patterns: HashMap<Pattern, Vec<(String, Vec<PredicateArg>)>> =
+            HashMap::new();
         let mut query = Query::new(grammar, &query_source, |pattern, predicate| {
             match predicate {
                 // Allow the `(#set! local.scope-inherits <bool>)` property to be parsed.
@@ -64,6 +69,17 @@ impl HighlightQuery {
                 } => {
                     non_local_patterns.insert(pattern);
                 }
+
+                UserPredicate::Other(predicate) => {
+                    let name = predicate.name().to_owned();
+                    let args = predicate.args().collect::<Vec<_>>();
+
+                    special_patterns
+                        .entry(pattern)
+                        .or_default()
+                        .push((name, args));
+                }
+
                 _ => return Err(InvalidPredicateError::unknown(predicate)),
             }
             Ok(())
@@ -86,6 +102,7 @@ impl HighlightQuery {
             non_local_patterns,
             local_reference_capture: query.get_capture("local.reference"),
             query,
+            special_patterns,
         })
     }
 
@@ -158,8 +175,9 @@ pub struct LayerData {
     dormant_highlights: Vec<HighlightedNode>,
 }
 
-pub struct Highlighter<'a, 'tree, Loader: LanguageLoader> {
-    query: QueryIter<'a, 'tree, HighlightQueryLoader<&'a Loader>, ()>,
+pub struct Highlighter<'a, 'tree, Loader: LanguageLoader, SpecialPredicates: SpecialQueryPredicates>
+{
+    query: QueryIter<'a, 'tree, HighlightQueryLoader<&'a Loader, SpecialPredicates>, ()>,
     next_query_event: Option<QueryIterEvent<'tree, ()>>,
     /// The stack of currently active highlights.
     /// The ranges of the highlights stack, so each highlight in the Vec must have a starting
@@ -222,14 +240,22 @@ pub enum HighlightEvent {
     Push,
 }
 
-impl<'a, 'tree: 'a, Loader: LanguageLoader> Highlighter<'a, 'tree, Loader> {
+impl<'a, 'tree: 'a, Loader: LanguageLoader, SpecialPredicates: SpecialQueryPredicates + Clone>
+    Highlighter<'a, 'tree, Loader, SpecialPredicates>
+{
     pub fn new(
         syntax: &'tree Syntax,
         src: RopeSlice<'a>,
         loader: &'a Loader,
         range: impl RangeBounds<u32>,
+        special_predicates: SpecialPredicates,
     ) -> Self {
-        let mut query = QueryIter::new(syntax, src, HighlightQueryLoader(loader), range);
+        let mut query = QueryIter::new(
+            syntax,
+            src,
+            HighlightQueryLoader(loader, special_predicates.clone()),
+            range,
+        );
         let active_language = query.current_language();
         let mut res = Highlighter {
             active_config: query.loader().0.get_config(active_language),
@@ -420,25 +446,15 @@ impl<'a, 'tree: 'a, Loader: LanguageLoader> Highlighter<'a, 'tree, Loader> {
                 .iter()
                 .rposition(|h| h.end <= range.end);
             if let Some(idx) = insert_position {
-                match self.active_highlights[idx].end.cmp(&range.end) {
-                    // If there is a prior highlight for this start..end range, replace it.
-                    cmp::Ordering::Equal => {
-                        if let Some(highlight) = highlight {
-                            self.active_highlights[idx] = highlight;
-                        } else {
-                            self.active_highlights.remove(idx);
-                        }
+                // Captures are emitted in the order that they are finished. Insert any
+                // highlights which start at the same position into the active highlights so
+                // that the ordering invariant remains satisfied.
+                if let Some(highlight) = highlight {
+                    if self.active_highlights[idx].end < range.end {
+                        self.active_highlights.insert(idx, highlight)
+                    } else {
+                        self.active_highlights.insert(idx + 1, highlight)
                     }
-                    // Captures are emitted in the order that they are finished. Insert any
-                    // highlights which start at the same position into the active highlights so
-                    // that the ordering invariant remains satisfied.
-                    cmp::Ordering::Less => {
-                        if let Some(highlight) = highlight {
-                            self.active_highlights.insert(idx, highlight)
-                        }
-                    }
-                    // By definition of our `rposition` predicate:
-                    cmp::Ordering::Greater => unreachable!(),
                 }
             } else {
                 self.active_highlights.extend(highlight);
@@ -465,9 +481,31 @@ impl<'a, 'tree: 'a, Loader: LanguageLoader> Highlighter<'a, 'tree, Loader> {
     }
 }
 
-pub(crate) struct HighlightQueryLoader<T>(T);
+pub trait SpecialQueryPredicates {
+    fn matches(
+        &self,
+        #[allow(unused)] name: &str,
+        #[allow(unused)] args: &[PredicateArg],
+        #[allow(unused)] query: &Query,
+        #[allow(unused)] mat: &QueryMatch,
+    ) -> bool {
+        false
+    }
+}
 
-impl<'a, T: LanguageLoader> QueryLoader<'a> for HighlightQueryLoader<&'a T> {
+impl SpecialQueryPredicates for () {}
+
+impl<T: SpecialQueryPredicates> SpecialQueryPredicates for &T {
+    fn matches(&self, name: &str, args: &[PredicateArg], query: &Query, mat: &QueryMatch) -> bool {
+        (*self).matches(name, args, query, mat)
+    }
+}
+
+pub(crate) struct HighlightQueryLoader<T, Sp = ()>(T, Sp);
+
+impl<'a, T: LanguageLoader, Sp: SpecialQueryPredicates> QueryLoader<'a>
+    for HighlightQueryLoader<&'a T, Sp>
+{
     fn get_query(&mut self, lang: Language) -> Option<&'a Query> {
         self.0
             .get_config(lang)
@@ -509,6 +547,18 @@ impl<'a, T: LanguageLoader> QueryLoader<'a> for HighlightQueryLoader<&'a T> {
                     .is_some_and(|def| range.start >= def.range.start)
             });
             if has_local_reference {
+                return false;
+            }
+        }
+
+        for (name, args) in highlight_query
+            .special_patterns
+            .get(&mat.pattern())
+            .iter()
+            .copied()
+            .flatten()
+        {
+            if !self.1.matches(name, args, &highlight_query.query, mat) {
                 return false;
             }
         }

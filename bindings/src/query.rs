@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 use std::{slice, str};
 
 use crate::query::predicate::TextPredicate;
-pub use crate::query::predicate::{InvalidPredicateError, Predicate};
+pub use crate::query::predicate::{InvalidPredicateError, Predicate, PredicateArg};
 use crate::Grammar;
 
 mod predicate;
@@ -216,7 +216,7 @@ impl Query {
     }
 
     #[inline]
-    fn get_string(&self, str: QueryStr) -> &str {
+    pub fn get_string(&self, str: QueryStr) -> &str {
         let value_id = str.0;
         // need an assertions because the ts c api does not do bounds check
         assert!(value_id <= self.num_strings, "invalid value index");
