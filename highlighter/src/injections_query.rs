@@ -8,9 +8,10 @@ use hashbrown::{HashMap, HashSet};
 use once_cell::sync::Lazy;
 use regex_cursor::engines::meta::Regex;
 use ropey::RopeSlice;
+use tree_sitter::query::PredicateArg;
 
 use crate::config::{LanguageConfig, LanguageLoader};
-use crate::highlighter::Highlight;
+use crate::highlighter::{Highlight, SpecialQueryPredicates};
 use crate::locals::Locals;
 use crate::parse::LayerUpdateFlags;
 use crate::{Injection, Language, Layer, LayerData, Range, Syntax, TREE_SITTER_MATCH_LIMIT};
@@ -89,6 +90,8 @@ pub struct InjectionsQuery {
     injection_language_capture: Option<Capture>,
     injection_filename_capture: Option<Capture>,
     injection_shebang_capture: Option<Capture>,
+
+    special_patterns: HashMap<Pattern, Vec<(String, Vec<PredicateArg>)>>,
     // Note that the injections query is concatenated with the locals query.
     pub(crate) local_query: Query,
     // TODO: Use a Vec<bool> instead?
@@ -110,6 +113,8 @@ impl InjectionsQuery {
 
         let mut injection_properties: HashMap<Pattern, InjectionProperties> = HashMap::new();
         let mut not_scope_inherits = HashSet::new();
+        let mut special_patterns: HashMap<Pattern, Vec<(String, Vec<PredicateArg>)>> =
+            HashMap::new();
         let injection_query = Query::new(grammar, injection_query_text, |pattern, predicate| {
             match predicate {
                 // injections
@@ -139,6 +144,16 @@ impl InjectionsQuery {
                     key: "injection.combined",
                     val: None,
                 } => injection_properties.entry(pattern).or_default().combined = true,
+
+                UserPredicate::Other(predicate) => {
+                    let name = predicate.name().to_owned();
+                    let args = predicate.args().collect::<Vec<_>>();
+
+                    special_patterns
+                        .entry(pattern)
+                        .or_default()
+                        .push((name, args));
+                }
                 predicate => {
                     return Err(InvalidPredicateError::unknown(predicate));
                 }
@@ -172,6 +187,7 @@ impl InjectionsQuery {
             injection_language_capture: injection_query.get_capture("injection.language"),
             injection_filename_capture: injection_query.get_capture("injection.filename"),
             injection_shebang_capture: injection_query.get_capture("injection.shebang"),
+            special_patterns: Default::default(),
             injection_query,
             not_scope_inherits,
             local_scope_capture: local_query.get_capture("local.scope"),
@@ -289,11 +305,12 @@ impl InjectionsQuery {
         node: &Node<'a>,
         source: RopeSlice<'a>,
         loader: &'a impl LanguageLoader,
+        special_predicates: &'a impl SpecialQueryPredicates,
     ) -> impl Iterator<Item = InjectionQueryMatch<'a>> + 'a {
         let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
             .execute_query(&self.injection_query, node, source);
         let injection_content_capture = self.injection_content_capture.unwrap();
-        let iter = iter::from_fn(move || loop {
+        let iter = iter::from_fn(move || 'main_loop: loop {
             let (query_match, node_idx) = cursor.next_matched_node()?;
             if query_match.matched_node(node_idx).capture != injection_content_capture {
                 continue;
@@ -302,6 +319,19 @@ impl InjectionsQuery {
                 query_match.remove();
                 continue;
             };
+
+            for (name, args) in self
+                .special_patterns
+                .get(&query_match.pattern())
+                .iter()
+                .copied()
+                .flatten()
+            {
+                if !special_predicates.matches(name, args, &self.injection_query, &query_match) {
+                    query_match.remove();
+                    continue 'main_loop;
+                }
+            }
             let range = query_match.matched_node(node_idx).node.byte_range();
             if mat.last_match {
                 query_match.remove();
@@ -363,6 +393,7 @@ impl Syntax {
         edits: &[tree_sitter::InputEdit],
         source: RopeSlice<'_>,
         loader: &impl LanguageLoader,
+        special_predicates: &impl SpecialQueryPredicates,
         mut parse_layer: impl FnMut(Layer),
     ) {
         self.map_injections(layer, None, edits);
@@ -384,7 +415,8 @@ impl Syntax {
         let mut injections: Vec<Injection> = Vec::with_capacity(layer_data.injections.len());
         let mut old_injections = take(&mut layer_data.injections).into_iter().peekable();
 
-        let injection_query = injections_query.execute(&parse_tree.root_node(), source, loader);
+        let injection_query =
+            injections_query.execute(&parse_tree.root_node(), source, loader, special_predicates);
 
         let mut combined_injections: HashMap<InjectionScope, Layer> = HashMap::with_capacity(32);
         for mat in injection_query {

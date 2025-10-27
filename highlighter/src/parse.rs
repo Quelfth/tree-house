@@ -5,6 +5,7 @@ use ropey::RopeSlice;
 use tree_sitter::Parser;
 
 use crate::config::LanguageLoader;
+use crate::highlighter::SpecialQueryPredicates;
 use crate::{Error, LayerData, Syntax};
 
 impl Syntax {
@@ -14,6 +15,7 @@ impl Syntax {
         timeout: Duration,
         edits: &[tree_sitter::InputEdit],
         loader: &impl LanguageLoader,
+        special_predicates: &impl SpecialQueryPredicates,
     ) -> Result<(), Error> {
         // size limit of 512MiB, TS just cannot handle files this big (too
         // slow). Furthermore, TS uses 32 (signed) bit indices so this limit
@@ -56,7 +58,9 @@ impl Syntax {
                 // always parse if this layer has never been parsed before
                 layer_data.parse(&mut parser, source, loader)?;
             }
-            self.run_injection_query(layer, edits, source, loader, |layer| queue.push(layer));
+            self.run_injection_query(layer, edits, source, loader, special_predicates, |layer| {
+                queue.push(layer)
+            });
             self.run_local_query(layer, source, loader);
         }
 

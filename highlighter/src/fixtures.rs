@@ -9,7 +9,7 @@ use tree_sitter::Query;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::LanguageLoader;
-use crate::highlighter::{Highlight, HighlightEvent, Highlighter};
+use crate::highlighter::{Highlight, HighlightEvent, Highlighter, SpecialQueryPredicates};
 use crate::query_iter::{QueryIter, QueryIterEvent};
 use crate::{Language, Range, Syntax};
 
@@ -97,6 +97,7 @@ pub fn check_highlighter_fixture<R: RangeBounds<usize>>(
     comment_prefix: &str,
     language: Language,
     loader: &impl LanguageLoader,
+    special_predicates: &impl SpecialQueryPredicates,
     get_highlight_name: impl Fn(Highlight) -> String,
     range: impl Fn(RopeSlice) -> R,
 ) {
@@ -105,6 +106,7 @@ pub fn check_highlighter_fixture<R: RangeBounds<usize>>(
             comment_prefix,
             language,
             loader,
+            special_predicates,
             get_highlight_name,
             src,
             range,
@@ -117,6 +119,7 @@ pub fn check_injection_fixture<R: RangeBounds<usize>>(
     comment_prefix: &str,
     language: Language,
     loader: &impl LanguageLoader,
+    special_predicates: &impl SpecialQueryPredicates,
     get_language_name: impl Fn(Language) -> String,
     range: impl Fn(RopeSlice) -> R,
 ) {
@@ -125,6 +128,7 @@ pub fn check_injection_fixture<R: RangeBounds<usize>>(
             comment_prefix,
             language,
             loader,
+            special_predicates,
             get_language_name,
             src,
             range,
@@ -136,12 +140,20 @@ pub fn roundtrip_highlighter_fixture<R: RangeBounds<usize>>(
     comment_prefix: &str,
     language: Language,
     loader: &impl LanguageLoader,
+    special_predicates: &impl SpecialQueryPredicates,
     get_highlight_name: impl Fn(Highlight) -> String,
     src: &str,
     range: impl Fn(RopeSlice) -> R,
 ) -> String {
     let raw = strip_annotations(src, comment_prefix);
-    let syntax = Syntax::new(raw.slice(..), language, Duration::from_secs(60), loader).unwrap();
+    let syntax = Syntax::new(
+        raw.slice(..),
+        language,
+        Duration::from_secs(60),
+        loader,
+        special_predicates,
+    )
+    .unwrap();
     let range = range(raw.slice(..));
     highlighter_fixture(
         comment_prefix,
@@ -157,12 +169,20 @@ pub fn roundtrip_injection_fixture<R: RangeBounds<usize>>(
     comment_prefix: &str,
     language: Language,
     loader: &impl LanguageLoader,
+    special_predicates: &impl SpecialQueryPredicates,
     get_language_name: impl Fn(Language) -> String,
     src: &str,
     range: impl Fn(RopeSlice) -> R,
 ) -> String {
     let raw = strip_annotations(src, comment_prefix);
-    let syntax = Syntax::new(raw.slice(..), language, Duration::from_secs(60), loader).unwrap();
+    let syntax = Syntax::new(
+        raw.slice(..),
+        language,
+        Duration::from_secs(60),
+        loader,
+        special_predicates,
+    )
+    .unwrap();
     let range = range(raw.slice(..));
     injections_fixture(
         comment_prefix,

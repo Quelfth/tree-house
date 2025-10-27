@@ -206,6 +206,7 @@ fn highlight_fixture(loader: &TestLanguageLoader, fixture: impl AsRef<Path>) {
         "// ",
         lang,
         loader,
+        &(),
         |highlight| loader.test_theme.borrow()[highlight.idx()].clone(),
         |_| ..,
     )
@@ -219,6 +220,7 @@ fn injection_fixture(loader: &TestLanguageLoader, fixture: impl AsRef<Path>) {
         "// ",
         lang,
         loader,
+        &(),
         |lang| loader.languages.get_index(lang.idx()).unwrap().0.clone(),
         |_| ..,
     )
@@ -247,7 +249,14 @@ fn layers() {
 /// ```
 pub fn hello() {}";
 
-    let syntax = Syntax::new(input.into(), loader.get("rust"), PARSE_TIMEOUT, &loader).unwrap();
+    let syntax = Syntax::new(
+        input.into(),
+        loader.get("rust"),
+        PARSE_TIMEOUT,
+        &loader,
+        &(),
+    )
+    .unwrap();
 
     let assert_injection = |snippet: &str, expected: &[&str]| {
         assert!(!expected.is_empty(), "all layers have at least 1 injection");
@@ -475,11 +484,12 @@ fn edit_remove_and_add_injection_layer() {
         loader.get("markdown"),
         PARSE_TIMEOUT,
         &loader,
+        &(),
     )
     .unwrap();
     // The test here is that `Syntax::update` can apply the edit `Ok(_)` without panicking.
     syntax
-        .update(after_text.into(), PARSE_TIMEOUT, &[edit], &loader)
+        .update(after_text.into(), PARSE_TIMEOUT, &[edit], &loader, &())
         .unwrap();
 
     // Now test the inverse. Start with the after text and edit it to be the before text. In this
@@ -497,11 +507,12 @@ fn edit_remove_and_add_injection_layer() {
         loader.get("markdown"),
         PARSE_TIMEOUT,
         &loader,
+        &(),
     )
     .unwrap();
     // The test here is that `Syntax::update` can apply the edit `Ok(_)` without panicking.
     syntax
-        .update(before_text.into(), PARSE_TIMEOUT, &[edit], &loader)
+        .update(before_text.into(), PARSE_TIMEOUT, &[edit], &loader, &())
         .unwrap();
 }
 

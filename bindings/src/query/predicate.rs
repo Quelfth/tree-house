@@ -143,6 +143,7 @@ impl Query {
         let predicate_steps = unsafe {
             let mut len = 0u32;
             let raw_predicates = ts_query_predicates_for_pattern(self.raw, pattern.0, &mut len);
+            #[allow(clippy::obfuscated_if_else)]
             (len != 0)
                 .then(|| slice::from_raw_parts(raw_predicates, len as usize))
                 .unwrap_or_default()

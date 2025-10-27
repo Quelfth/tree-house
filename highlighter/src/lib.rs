@@ -9,6 +9,7 @@ use std::time::Duration;
 use tree_sitter::{IncompatibleGrammarError, Node, Tree};
 
 pub use crate::config::{read_query, LanguageConfig, LanguageLoader};
+use crate::highlighter::SpecialQueryPredicates;
 pub use crate::injections_query::{InjectionLanguageMarker, InjectionsQuery};
 use crate::parse::LayerUpdateFlags;
 pub use crate::tree_cursor::TreeCursor;
@@ -93,6 +94,7 @@ impl Syntax {
         language: Language,
         timeout: Duration,
         loader: &impl LanguageLoader,
+        special_predicates: &impl SpecialQueryPredicates,
     ) -> Result<Self, Error> {
         let root_layer = LayerData {
             parse_tree: None,
@@ -115,7 +117,9 @@ impl Syntax {
             layers,
         };
 
-        syntax.update(source, timeout, &[], loader).map(|_| syntax)
+        syntax
+            .update(source, timeout, &[], loader, special_predicates)
+            .map(|_| syntax)
     }
 
     pub fn layer(&self, layer: Layer) -> &LayerData {
@@ -200,7 +204,7 @@ impl Syntax {
         }))
     }
 
-    pub fn walk(&self) -> TreeCursor {
+    pub fn walk(&self) -> TreeCursor<'_> {
         TreeCursor::new(self)
     }
 }
